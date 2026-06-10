@@ -4,9 +4,10 @@ GitHub `MIA-laboratory/AM_video` で公開する内容の記録。
 
 ## 方針
 
-- 公開対象 = **時系列(制約付きDP)コードのみ**。フレーム分類器のコードは非公開。
-- 論文との一致は問わない（分類器非依存の時系列コードで、Inception-ResNet-v2予測で動作）。
-- 学習済みモデル・集計CSV・患者データ（動画・フレーム・工程時刻）は**全て除外**。
+- 公開対象 = **方法論（制約付きDPによる時系列再構成）の実装のみ**。
+- 分類器・OK/NGモデルは利用者が持ち込む設計（MATLAB `.mat` / Python のいずれも可）。
+  論文に準拠するのは**方法論**であり、特定のモデル・データではない。
+- 学習済みモデル・集計CSV・患者データ（動画・フレーム・工程時刻）は**全て同梱しない**。
 - ライセンス: **MIT**。
 
 ## 検証済みの事実
@@ -25,9 +26,14 @@ GitHub `MIA-laboratory/AM_video` で公開する内容の記録。
 | `python_temporal/v6_temporal.py` | 構成A/B/C/D の駆動CLI |
 | `python_temporal/generate_fig5.py` | 最良症例タイムライン図の生成 |
 | `python_temporal/config.py` | クラス定義・DP制約・I/Oパス（環境変数で上書き可） |
-| `README.md` | 使い方・入力CSV形式・実行例・ライセンス・引用 |
+| `okng/export_okprobs_matlab.m` | 自分のMATLAB `.mat` OK/NGモデルからOK確率CSVを出力するテンプレート |
+| `okng/export_okprobs_python.py` | 自分のPython OK/NGモデルからOK確率CSVを出力するテンプレート |
+| `README.md` | 使い方・入力形式・OK/NGモデル持ち込み手順・ライセンス・引用 |
 | `LICENSE` | MIT License |
 | `.gitignore` | 患者データ・モデルの誤コミット防止 |
+
+OK確率の入力は **CSV / parquet 両対応**（`path`, `ok_prob` 列）。MATLAB/Python どちらの
+OK/NGモデルからでも出力でき、構成B/Dに適用可能。構成A/CはOK/NG不要で予測CSVのみで動作。
 
 ## 公開前の整備
 

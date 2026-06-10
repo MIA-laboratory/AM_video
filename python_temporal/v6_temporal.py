@@ -29,12 +29,23 @@ from temporal_analysis import (
 
 
 def load_okprobs(fold: int) -> dict[str, float]:
-    cache_path = Path(config.CACHE_DIR) / f"okprobs_fold{fold}.parquet"
-    if not cache_path.exists():
-        raise FileNotFoundError(f"OK-prob cache missing: {cache_path}. "
-                                f"Run precompute_okprobs.py first.")
-    df = pd.read_parquet(cache_path)
-    return dict(zip(df["path"].map(os.path.basename), df["ok_prob"]))
+    """Load OK probabilities for a fold from a bring-your-own OK/NG model.
+
+    Looks in CACHE_DIR for ``okprobs_fold{fold}.parquet`` or ``.csv`` with
+    columns ``path`` (frame filename, ...CaseXXYY_HHMMSS.jpg) and ``ok_prob``
+    (probability the frame is OK, 0..1). Either a MATLAB .mat model or a Python
+    model can produce this table — see README, "Bring your own OK/NG model".
+    """
+    base = Path(config.CACHE_DIR) / f"okprobs_fold{fold}"
+    for ext, reader in ((".parquet", pd.read_parquet), (".csv", pd.read_csv)):
+        path = base.with_suffix(ext)
+        if path.exists():
+            df = reader(path)
+            return dict(zip(df["path"].map(os.path.basename), df["ok_prob"]))
+    raise FileNotFoundError(
+        f"OK-probability file not found: {base}.parquet or {base}.csv. "
+        f"Provide a table with columns 'path' and 'ok_prob' exported from your "
+        f"OK/NG model (see README, 'Bring your own OK/NG model').")
 
 
 def build_timeline(pred_csv: Path, case_num: int, video_offsets: dict,

@@ -12,11 +12,10 @@ reconstructs a temporally consistent surgical timeline using a **constrained dyn
 programming (DP)** algorithm and evaluates phase-boundary accuracy with a
 duration-normalized **percentage mean absolute error (%MAE)** metric.
 
-> This repository contains the **temporal-analysis code only**. The frame-classifier
-> training code, the trained models, and all patient data (surgical videos, extracted
-> frames, phase-time annotations) are **not included**: the videos and frames are
-> patient data under IRB approval (No.018-0291), and trained models are available on
-> request from the corresponding author.
+> **This repository implements the methodology, not a bundled model.** It contains the
+> temporal-analysis code only. You bring your own frame classifier and (optionally) your
+> own OK/NG model — built in **MATLAB (`.mat`)** or **Python** — and feed their outputs
+> in through the documented CSV/parquet formats. No models or data are included.
 
 ---
 
@@ -40,6 +39,9 @@ python_temporal/
   v6_temporal.py         per-configuration driver / CLI (A / B / C / D)
   generate_fig5.py       best-case timeline figure
   config.py              scene classes, DP constraints, configurable I/O paths
+okng/                    bring-your-own OK/NG model: export OK-probability tables
+  export_okprobs_matlab.m   from a MATLAB .mat OK/NG model
+  export_okprobs_python.py  from a Python OK/NG model
 ```
 
 ---
@@ -64,8 +66,9 @@ required**.
 **2. Expert phase-time annotations** — `AMVIDEO_PHASE_TIMES` (xlsx): per case, the start
 time (seconds) of each phase from Craniotomy onward.
 
-**3. (Optional) OK probabilities** for configs B/D — `okprobs_fold{1..5}.parquet` in
-`AMVIDEO_OKPROB_DIR`, columns `path`, `ok_prob` (output of the OK/NG classifier).
+**3. (Optional) OK probabilities** for configs B/D — `okprobs_fold{1..5}.csv` **or**
+`.parquet` in `AMVIDEO_OKPROB_DIR`, with columns `path` and `ok_prob` (the probability
+each frame is OK, 0..1). This is the output of your own OK/NG model — see below.
 
 ---
 
@@ -91,6 +94,27 @@ python v6_temporal.py --config B_model1_okng --threshold 0.5 --save_plots
 Configs: `A_model1`, `B_model1_okng`, `C_model3`, `D_model3_okng`. Each writes
 `timepoint_errors.csv` and `timepoint_error_summary.csv` (per-phase MAE and %MAE) and
 prints the overall %MAE.
+
+---
+
+## Bring your own OK/NG model
+
+The inference-time OK/NG gate (configs B / D) is **model-agnostic**: it only needs, per
+fold, a table of per-frame OK probabilities placed in `AMVIDEO_OKPROB_DIR`:
+
+```
+okprobs_fold{1..5}.csv   (or .parquet)
+   path      frame filename ending in CaseXXYY_HHMMSS.jpg
+   ok_prob   probability the frame is OK (usable), in [0, 1]
+```
+
+Produce that table from **your own** OK/NG model — the templates in `okng/` handle the
+file-walking and CSV writing; you fill in model loading and per-frame prediction:
+
+- **MATLAB `.mat` model** → [`okng/export_okprobs_matlab.m`](okng/export_okprobs_matlab.m)
+- **Python model** → [`okng/export_okprobs_python.py`](okng/export_okprobs_python.py)
+
+Configs A and C (no OK/NG gate) do not need this and run with only the prediction CSVs.
 
 ### Requirements
 
