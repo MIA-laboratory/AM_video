@@ -1,0 +1,43 @@
+# ── Patient / medical data — NEVER commit (IRB No.018-0291) ───────────
+# Surgical videos, extracted frames, and any per-case annotations.
+*.mp4
+*.avi
+*.jpg
+*.jpeg
+*.png
+*.tif
+*.tiff
+*.bmp
+rawData/
+Dataset/
+Save_baseDiv/
+ssLearning*/data*/
+**/predictions_fold*.csv
+**/okprobs*.parquet
+supervised_phaseTime.xlsx
+
+# ── Trained models — "available on request" (paper Data Availability) ──
+*.mat
+*.pth
+*.pt
+*.onnx
+*.h5
+models/
+
+# ── Results / caches / figures (regenerated locally) ──────────────────
+results/
+cache/
+*.parquet
+
+# ── Python ────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+.venv/
+venv/
+
+# ── OS / editor ───────────────────────────────────────────────────────
+Thumbs.db
+.DS_Store
+*.asv
+*.bak
