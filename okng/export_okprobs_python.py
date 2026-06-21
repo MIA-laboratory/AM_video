@@ -23,9 +23,9 @@ import pandas as pd
 # === EDIT THESE TWO FUNCTIONS FOR YOUR MODEL ============================
 def load_model(weights_path):
     """Load and return your OK/NG model (any framework)."""
-    # Example (PyTorch / timm), adapt to your model:
+    # Example (PyTorch / timm), adapt to your model (any 2-class backbone works):
     #   import timm, torch
-    #   model = timm.create_model("efficientnet_b3", pretrained=False, num_classes=2)
+    #   model = timm.create_model("inception_resnet_v2", pretrained=False, num_classes=2)
     #   model.load_state_dict(torch.load(weights_path, map_location="cpu",
     #                                    weights_only=True))
     #   model.eval()
@@ -38,7 +38,7 @@ def ok_probability(model, image_path):
     # Example (PyTorch, OK = class index 1):
     #   from PIL import Image
     #   import numpy as np, torch
-    #   img = Image.open(image_path).convert("RGB").resize((300, 300))
+    #   img = Image.open(image_path).convert("RGB").resize((299, 299))
     #   x = (np.asarray(img, np.float32) / 255.0 - [0.485, 0.456, 0.406]) \
     #       / [0.229, 0.224, 0.225]
     #   x = torch.from_numpy(x.transpose(2, 0, 1)).unsqueeze(0).float()
