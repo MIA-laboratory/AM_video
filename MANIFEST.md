@@ -12,19 +12,23 @@ GitHub `MIA-laboratory/AM_video` で公開する内容の記録。
 
 ## 検証済みの事実
 
-- 本コードに **Inception-ResNet-v2(MATLAB) の Model 1 予測** を入力して構成Aを実行 →
-  **overall %MAE = 1.922%（median 0.421%）**。コードが Inception-ResNet-v2 予測で
-  正しく動作することを確認（CPU実行）。
+- 本コードに **Inception-ResNet-v2(MATLAB) の Model 1 予測** を入力して構成A–Dが
+  正常に動作することを確認（CPU実行）。%MAE の正本値は論文 Table 6：
+  構成A（OK/NGなし）overall 2.00%（median 0.50%）、構成B（OK/NG @ θ=0.5）
+  overall 1.92%（median 0.33%）。完全再現には Table 6 と同一の予測CSV・設定
+  （平滑化窓・候補サブサンプリング）が必要。
 - 動画長はフレーム名から算出する実装で、**患者画像フォルダなしで動作**。
-- 構文チェック全4ファイルOK、EfficientNet/`work`参照・個人情報・絶対パスの残存なし。
+- 全Pythonファイルの構文チェックOK、EfficientNet/`work`参照・個人情報・絶対パスの残存なし。
 
 ## 公開ファイル
 
 | ファイル | 内容 |
 |---------|------|
 | `python_temporal/temporal_analysis.py` | 制約付きDP・平滑化・%MAE・可視化 |
-| `python_temporal/v6_temporal.py` | 構成A/B/C/D の駆動CLI |
-| `python_temporal/generate_fig5.py` | 最良症例タイムライン図の生成 |
+| `python_temporal/v6_temporal.py` | 構成A/B/C/D の単一実行CLI |
+| `python_temporal/run_v6.py` | 構成×OK/NG閾値を一括実行する駆動スクリプト |
+| `python_temporal/baselines.py` | 系列ベースライン比較（論文 Table 10） |
+| `python_temporal/generate_fig5.py` | 最良症例タイムライン図の生成（論文 Figure 7） |
 | `python_temporal/config.py` | クラス定義・DP制約・I/Oパス（環境変数で上書き可） |
 | `okng/export_okprobs_matlab.m` | 自分のMATLAB `.mat` OK/NGモデルからOK確率CSVを出力するテンプレート |
 | `okng/export_okprobs_python.py` | 自分のPython OK/NGモデルからOK確率CSVを出力するテンプレート |

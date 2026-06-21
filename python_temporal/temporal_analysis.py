@@ -183,6 +183,11 @@ def dp_segmentation(times, probs):
     K = config.NUM_SCENE_CLASSES
     min_dur = np.array([config.MIN_PHASE_DURATION[c] for c in config.SCENE_CLASSES])
     NEG_INF = -1e15
+    # Minimum-duration constraint (paper Sec. 2.8.2): each phase spans at least D_k.
+    # It is enforced below as ">= min_dur - 1" — a 1-second tolerance so that a segment
+    # landing exactly on D_k is not spuriously rejected by the ~500-position boundary
+    # subsampling / float rounding. The %MAE results are invariant to this tolerance
+    # (see the minimum-duration sensitivity table in the paper).
 
     # Subsample
     step = max(1, n // 500)

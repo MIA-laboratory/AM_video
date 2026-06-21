@@ -36,8 +36,10 @@ duration-normalized **percentage mean absolute error (%MAE)** metric.
 ```
 python_temporal/
   temporal_analysis.py   constrained DP, smoothing, %MAE, timeline plotting
-  v6_temporal.py         per-configuration driver / CLI (A / B / C / D)
-  generate_fig5.py       best-case timeline figure
+  v6_temporal.py         single-configuration evaluator / CLI (A / B / C / D)
+  run_v6.py              driver: sweeps all configs x OK/NG thresholds
+  baselines.py           sequence-aware baseline decoders (paper Table 10)
+  generate_fig5.py       best-case timeline figure (manuscript Figure 7)
   config.py              scene classes, DP constraints, configurable I/O paths
 okng/                    bring-your-own OK/NG model: export OK-probability tables
   export_okprobs_matlab.m   from a MATLAB .mat OK/NG model
@@ -95,6 +97,21 @@ Configs: `A_model1`, `B_model1_okng`, `C_model3`, `D_model3_okng`. Each writes
 `timepoint_errors.csv` and `timepoint_error_summary.csv` (per-phase MAE and %MAE) and
 prints the overall %MAE.
 
+Run the full configuration x OK/NG-threshold sweep (reproduces the per-configuration
+%MAE table and the threshold ablation) with:
+
+```bash
+python run_v6.py
+```
+
+Reproduce the sequence-aware baseline comparison (constrained DP vs frame-wise argmax,
+argmax+smoothing, unordered HMM/Viterbi, ordered DP without minimum duration, and
+change-point detection) on identical configuration-B inputs with:
+
+```bash
+python baselines.py
+```
+
 ---
 
 ## Bring your own OK/NG model
@@ -137,7 +154,7 @@ Released under the [MIT License](LICENSE).
 ## Citation
 
 If you use this code, please cite the associated *Applied Sciences* (2026) article on
-automated scene classification and explainable time-point estimation for AVM resection
+automated scene classification and interpretable time-point estimation for AVM resection
 videos.
 
 ## Acknowledgements

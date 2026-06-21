@@ -1,17 +1,20 @@
 """
-Generate Figure 5 (Temporal Segmentation for the best-performing case) for v6.
+Generate the best-performing-case temporal-segmentation figure (manuscript Figure 7).
 
-Layout matches the v5 figure embedded in manuscript_v0507.docx:
+(The script keeps its historical filename, generate_fig5.py, but produces the figure
+numbered Figure 7 in the published manuscript.)
+
+Layout of the manuscript timeline figure:
   - Top: smoothed scene probabilities (6 classes) vs. time.
   - Middle: DP-predicted phase band.
   - Middle: Expert (ground truth) phase band with %MAE labels at each transition.
   - Title carries Total Error (s) and Mean %MAE.
 
-In v6 we use configuration B (Model 1 + inference-time OK/NG filter at θ=0.5),
-which gives the lowest overall %MAE. Best-performing case under B is Case 16
-(internal numbering), labeled as "Case IX" under the v6 Roman-numeral scheme.
+We use configuration B (Model 1 + inference-time OK/NG filter at θ=0.5), which gives
+the lowest overall %MAE. Best-performing case under B is Case 16 (internal numbering),
+labeled as "Case IX" under the manuscript Roman-numeral scheme.
 
-Output: work2/paper/figure5_caseIX_v6.png
+Output: <AMVIDEO_FIGURES, default ./figures>/figure7_caseIX.png
 """
 from __future__ import annotations
 import os
@@ -247,7 +250,7 @@ def plot_figure(data: dict, case_label: str, out_path: Path) -> None:
 def main() -> None:
     data = compute_case_data(BEST_CASE, BEST_FOLD, THRESHOLD, vis_smooth_window=600)
     case_label = CASE_ROMAN[BEST_CASE]
-    out_path = Path(config.PAPER_DIR) / f"figure5_case{case_label}_v6.png"
+    out_path = Path(config.PAPER_DIR) / f"figure7_case{case_label}.png"
     plot_figure(data, case_label, out_path)
 
 
