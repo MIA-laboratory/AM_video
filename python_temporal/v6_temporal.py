@@ -3,10 +3,15 @@ v6 unified temporal evaluation.
 
 Given an existing scene-prediction CSV (Model 1 or Model 3) plus the cached
 OK probabilities, build a timeline, optionally drop frames with OK prob
-below `threshold`, smooth, run constrained DP, and compute %MAE.
+below `threshold`, smooth, decode with the non-monotonic HSMM, and compute %MAE.
 
-This is invoked many times by run_v6.py (once per configuration × threshold).
-The DP and CSV reading are CPU-light, so this script does NOT need a GPU.
+The four configurations map to the manuscript:
+  A = Model 1 (no OK/NG gate)                 C = Model 3 (training-time OK/NG)
+  B = Model 1 + inference-time OK/NG filter    D = Model 3 + inference-time OK/NG filter
+
+Per fold, the transition matrix is learned from the training cases only (no leakage).
+This is invoked many times by run_v6.py (once per configuration × threshold). The
+HSMM decode and CSV reading are CPU-light, so this script does NOT need a GPU.
 """
 from __future__ import annotations
 import argparse
@@ -23,8 +28,9 @@ import pandas as pd
 import config
 from temporal_analysis import (
     parse_phase_times, build_surgery_timeline,
-    smooth_probabilities, dp_segmentation, compute_timepoint_errors,
-    plot_surgery_timeline, get_video_durations, set_duration_source,
+    smooth_probabilities, learn_transition, estimate_transitions,
+    compute_timepoint_errors, plot_surgery_timeline,
+    get_video_durations, set_duration_source,
 )
 
 
@@ -111,6 +117,10 @@ def run_one_config(name: str, pred_dir: Path, use_okng: bool,
         if not csv_path.exists():
             print(f"  [{name}] missing {csv_path}, skipping fold {fold}")
             continue
+        # Transition matrix from TRAINING cases only (no leakage from held-out cases).
+        test_nums = {int(c.replace("Case", "")) for c in config.FOLD_TEST_CASES[fold]}
+        logA = learn_transition({cn: seq for cn, seq in phase_times.items()
+                                 if cn not in test_nums})
         for case_str in config.FOLD_TEST_CASES[fold]:
             case_num = int(case_str.replace("Case", ""))
             if case_num not in phase_times:
@@ -125,9 +135,9 @@ def run_one_config(name: str, pred_dir: Path, use_okng: bool,
                       f"(total={n_tot}, kept={n_kept}), skipping")
                 continue
             smoothed = smooth_probabilities(times, probs)
-            boundaries = dp_segmentation(times, smoothed)
+            predicted = estimate_transitions(times, smoothed, logA)
 
-            errors = compute_timepoint_errors(boundaries, expert)
+            errors = compute_timepoint_errors(predicted, expert)
             durs = get_video_durations(case_num)
             total_dur = sum(durs[v] + 1 for v in sorted(durs.keys())) - 1
             for pname, err in errors.items():
@@ -143,7 +153,7 @@ def run_one_config(name: str, pred_dir: Path, use_okng: bool,
                 })
             if save_plots:
                 plot_surgery_timeline(
-                    times, smoothed, boundaries, expert, case_num,
+                    times, smoothed, predicted, expert, case_num,
                     str(save_dir / f"timeline_case{case_num:02d}_fold{fold}.png"))
 
     df = pd.DataFrame(rows)

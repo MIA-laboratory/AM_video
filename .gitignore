@@ -14,6 +14,11 @@ Save_baseDiv/
 ssLearning*/data*/
 **/predictions_fold*.csv
 **/okprobs*.parquet
+**/okprobs*.csv
+# Expert phase-time annotations (per-case clinical data). Current pipeline reads
+# phase_times.xlsx; older code used supervised_phaseTime.xlsx. Ignore all xlsx to be safe.
+*.xlsx
+phase_times.xlsx
 supervised_phaseTime.xlsx
 
 # ── Trained models — "available on request" (paper Data Availability) ──
