@@ -1,12 +1,28 @@
 """
-Surgery-level temporal analysis and DP-based scene transition estimation.
+Surgery-level temporal reconstruction with a non-monotonic hidden semi-Markov
+model (HSMM).
 
 Reads per-frame class-probability CSVs from a configurable directory. The CSVs
 are exported by the frame classifier (in this study, the Inception-ResNet-v2
-networks trained in MATLAB); this temporal stage is classifier-agnostic and only
-needs columns `path` and `prob_<ClassName>` for each of the six scene classes.
+networks fine-tuned in PyTorch); this temporal stage is classifier-agnostic and
+only needs columns `path` and `prob_<ClassName>` for each of the six scene classes.
 
-Optimized: vectorized smoothing, GPU-accelerated DP via PyTorch.
+Method (manuscript Sec. 2.8):
+  1. Smooth the per-frame posteriors with a sliding window (Eq. 1).
+  2. Learn a data-driven phase->phase transition matrix from the expert phase
+     sequences of the TRAINING cases only (per fold; Eq. 3). Self-transitions are
+     removed and never-observed transitions receive a small floor epsilon, so the
+     model can revisit an earlier phase but is discouraged from doing so unless the
+     evidence is strong. No fixed left-to-right order is imposed -> non-monotonic.
+  3. Decode with a segmental dynamic program (semi-Markov): each segment scores its
+     smoothed log-emission plus the log-transition into it, minus a constant switch
+     penalty lambda that suppresses over-segmentation, subject to a per-phase minimum
+     duration D_k (Eqs. 2, 4). The first segment is fixed to Pre-Craniotomy.
+  4. Read the phase-onset time as the first frame decoded to each phase
+     (first-entry semantics), and score it against the expert onset via %MAE.
+
+Boundary estimation runs on a few hundred subsampled candidate positions and is
+lightweight (the heavy compute is the frame classifier, not this stage).
 """
 import os
 import re
@@ -14,7 +30,6 @@ import glob
 import datetime
 import numpy as np
 import pandas as pd
-import torch
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -22,19 +37,31 @@ import openpyxl
 
 import config
 
+# Class ordering helpers.
+PHASE_INDEX = {p: i for i, p in enumerate(config.SCENE_CLASSES)}
+
 
 # ── Phase time parsing ─────────────────────────────────────────────────
 
 def parse_phase_times(xlsx_path=config.PHASE_TIME_XLSX):
-    wb = openpyxl.load_workbook(xlsx_path)
+    """Read expert phase-onset annotations.
+
+    Expected columns (first sheet): [case-video id "CC-VV", start time, phase name].
+    Phase names must match config.SCENE_CLASSES. Returns
+    {case_num: [(video_num, seconds, phase_name), ...]} sorted by (video, time).
+    """
+    wb = openpyxl.load_workbook(xlsx_path, data_only=True)
     ws = wb[wb.sheetnames[0]]
     phase_times = {}
     for row in ws.iter_rows(min_row=1, max_row=ws.max_row, values_only=True):
-        if row[0] is None or row[2] is None:
+        if row[0] is None or len(row) < 3 or row[2] is None:
             continue
         parts = str(row[0]).split("-")
-        case_num = int(parts[0])
-        video_num = int(parts[1])
+        try:
+            case_num = int(parts[0])
+            video_num = int(parts[1])
+        except (ValueError, IndexError):
+            continue
         t = row[1]
         if isinstance(t, datetime.time):
             seconds = t.hour * 3600 + t.minute * 60 + t.second
@@ -43,9 +70,7 @@ def parse_phase_times(xlsx_path=config.PHASE_TIME_XLSX):
         else:
             seconds = int(t)
         phase_name = str(row[2]).strip()
-        if case_num not in phase_times:
-            phase_times[case_num] = []
-        phase_times[case_num].append((video_num, seconds, phase_name))
+        phase_times.setdefault(case_num, []).append((video_num, seconds, phase_name))
     for case_num in phase_times:
         phase_times[case_num].sort(key=lambda x: (x[0], x[1]))
     return phase_times
@@ -92,6 +117,11 @@ def get_video_durations(case_num):
 
 
 def build_surgery_timeline(case_num, phase_times_entry):
+    """Concatenate split videos into one surgery timeline.
+
+    Returns (video_offsets, expert_transitions) where expert_transitions is a list
+    of (global_time_seconds, phase_name) for every annotated onset.
+    """
     durations = get_video_durations(case_num)
     if not durations:
         return None, None
@@ -104,9 +134,17 @@ def build_surgery_timeline(case_num, phase_times_entry):
     expert_transitions = []
     for vid_num, time_sec, phase_name in phase_times_entry:
         if vid_num in video_offsets:
-            global_time = video_offsets[vid_num] + time_sec
-            expert_transitions.append((global_time, phase_name))
+            expert_transitions.append((video_offsets[vid_num] + time_sec, phase_name))
     return video_offsets, expert_transitions
+
+
+def expert_first_starts(expert_transitions):
+    """First (earliest) global onset per phase name -> {phase_name: global_time}."""
+    starts = {}
+    for global_time, phase_name in sorted(expert_transitions, key=lambda x: x[0]):
+        if phase_name in PHASE_INDEX and phase_name not in starts:
+            starts[phase_name] = global_time
+    return starts
 
 
 # ── Prediction timeline reconstruction ─────────────────────────────────
@@ -154,7 +192,7 @@ def build_prediction_timeline(pred_csv_path, target_case_num, video_offsets):
     return times[order], probs[order]
 
 
-# ── Temporal smoothing ─────────────────────────────────────────────────
+# ── Temporal smoothing (Eq. 1) ─────────────────────────────────────────
 
 def smooth_probabilities(times, probs, window=config.SMOOTHING_WINDOW):
     from scipy.ndimage import uniform_filter1d
@@ -168,132 +206,163 @@ def smooth_probabilities(times, probs, window=config.SMOOTHING_WINDOW):
     return smoothed
 
 
-# ── Constrained DP (GPU-accelerated) ───────────────────────────────────
+# ── Data-driven transition matrix (Eq. 3) ──────────────────────────────
 
-def dp_segmentation(times, probs):
-    """
-    Find K-1 = 5 boundaries b0 < b1 < ... < b4 splitting n frames into K=6 phases.
-    Phase k occupies [b_{k-1}, b_k) with b_{-1}=0 and b_5=n.
-    Score = sum_k sum_{t in phase_k} log p_k(t), maximized subject to min-duration.
+def learn_transition(train_phase_times, floor=None):
+    """Estimate log phase->phase transition probabilities from expert sequences.
 
-    Uses GPU-vectorized DP on ~500 subsampled candidate positions.
-    Returns: list of 5 boundary times.
+    `train_phase_times` maps case_num -> [(video, seconds, phase_name), ...] and MUST
+    contain training cases only (call once per fold with the held-in cases) so that no
+    test-case ordering leaks into the decoder.
+
+    The full annotated sequence is used (recurrences included), self-transitions are
+    dropped, and never-observed transitions get a small floor epsilon. Row-normalized;
+    returns a K x K matrix of log-probabilities.
     """
-    n = len(times)
+    if floor is None:
+        floor = config.TRANSITION_FLOOR
     K = config.NUM_SCENE_CLASSES
-    min_dur = np.array([config.MIN_PHASE_DURATION[c] for c in config.SCENE_CLASSES])
-    NEG_INF = -1e15
-    # Minimum-duration constraint (paper Sec. 2.8.2): each phase spans at least D_k.
-    # It is enforced below as ">= min_dur - 1" — a 1-second tolerance so that a segment
-    # landing exactly on D_k is not spuriously rejected by the ~500-position boundary
-    # subsampling / float rounding. The %MAE results are invariant to this tolerance
-    # (see the minimum-duration sensitivity table in the paper).
+    counts = np.zeros((K, K))
+    for _cn, seq in train_phase_times.items():
+        phases = ["PreCraniotomy"] + [p for (_v, _s, p) in seq if p in PHASE_INDEX]
+        for a, b in zip(phases[:-1], phases[1:]):
+            if a in PHASE_INDEX and b in PHASE_INDEX and a != b:
+                counts[PHASE_INDEX[a], PHASE_INDEX[b]] += 1
+    A = np.full((K, K), floor)
+    np.fill_diagonal(A, 0.0)
+    A = A + counts
+    A = A / A.sum(axis=1, keepdims=True)
+    return np.log(A + 1e-12)
 
-    # Subsample
-    step = max(1, n // 500)
-    idx = np.arange(0, n, step)
-    if idx[-1] != n - 1:
-        idx = np.append(idx, n - 1)
+
+# ── Non-monotonic HSMM decoder (Eqs. 2, 4) ─────────────────────────────
+
+def hsmm_decode(times, probs, logA,
+                min_dur=None, n_cand=None, switch_pen=None):
+    """Segmental (semi-Markov) DP decode. Returns a per-frame phase-label array.
+
+    Each segment scores its smoothed log-emission (summed over frames) plus the
+    log-transition logA[prev, k] into phase k, minus a constant switch penalty. A
+    segment for phase k must last at least min_dur[k] seconds. No fixed order is
+    imposed, so an earlier phase may recur. The first segment is forced to be
+    Pre-Craniotomy (surgery always begins before craniotomy).
+    """
+    if min_dur is None:
+        min_dur = config.MIN_PHASE_DURATION
+    if n_cand is None:
+        n_cand = config.BOUNDARY_CANDIDATES
+    if switch_pen is None:
+        switch_pen = config.SWITCH_PENALTY
+
+    n, K = len(times), probs.shape[1]
+    step = max(1, n // n_cand)
+    idx = np.r_[np.arange(0, n, step), n - 1]
+    idx = np.unique(idx)
     m = len(idx)
 
-    device = torch.device(config.DEVICE if torch.cuda.is_available() else "cpu")
-
-    # Cumulative log-probs: cum[i, k] = sum of log_probs[0:i, k]
-    log_p = np.log(probs + 1e-8)
+    logP = np.log(probs + 1e-8)
     cum = np.zeros((n + 1, K))
-    cum[1:] = np.cumsum(log_p, axis=0)
-    cum_t = torch.tensor(cum, dtype=torch.float32, device=device)
-    idx_t = torch.tensor(idx, dtype=torch.long, device=device)
-    t_sub = torch.tensor(times[idx], dtype=torch.float32, device=device)
+    cum[1:] = np.cumsum(logP, axis=0)          # cum[b,k]-cum[a,k] = emission of [a,b)
+    t_sub = times[idx]
+    md = np.array([min_dur[c] for c in config.SCENE_CLASSES])
+    NEG = -1e18
 
-    # seg_score(a, b, k) = cum[b, k] - cum[a, k]  (frames [a, b))
+    dp = np.full((m, K), NEG)
+    back = np.full((m, K, 2), -1)              # backpointer: (prev_i, prev_phase)
 
-    # --- Boundary 0: phase 0 occupies [0, idx[j]) ---
-    # dp[j] = score of phase 0 from frame 0 to frame idx[j]
-    dp = cum_t[idx_t, 0] - cum_t[0, 0]   # (m,)
-    dp = torch.where(t_sub - t_sub[0] >= min_dur[0] - 1, dp, NEG_INF)
-    bp_list = []
+    # First segment [0, idx[j]) is Pre-Craniotomy.
+    for j in range(m):
+        if t_sub[j] - times[0] >= md[0] - 1:
+            dp[j, 0] = cum[idx[j], 0] - cum[0, 0]
 
-    # --- Boundaries 1..3 (phases 1..3, intermediate) ---
-    for b in range(1, K - 2):
-        # Phase b occupies [idx[i], idx[j]).  i = prev boundary pos, j = new boundary pos.
-        # seg[j, i] = cum[idx[j], b] - cum[idx[i], b]
-        seg = cum_t[idx_t, b].unsqueeze(1) - cum_t[idx_t, b].unsqueeze(0)  # (m, m)
-        cand = dp.unsqueeze(0) + seg  # (m, m): cand[j, i]
+    # Segmental recursion.
+    for j in range(m):
+        for k in range(K):
+            best = dp[j, k]
+            for i in range(j):
+                if t_sub[j] - t_sub[i] < md[k] - 1:      # minimum-duration constraint
+                    continue
+                seg = cum[idx[j], k] - cum[idx[i], k]    # emission of segment [i,j) as phase k
+                col = dp[i] + logA[:, k] + seg - switch_pen
+                ki = int(np.argmax(col))
+                v = col[ki]
+                if v > best:
+                    best = v
+                    dp[j, k] = v
+                    back[j, k] = (i, ki)
 
-        dur = t_sub.unsqueeze(1) - t_sub.unsqueeze(0)  # (m, m): dur[j, i]
-        ii = torch.arange(m, device=device).unsqueeze(0)  # (1, m) col
-        ji = torch.arange(m, device=device).unsqueeze(1)  # (m, 1) row
-        mask = (ii < ji) & (dur >= min_dur[b] - 1)
-        cand = torch.where(mask, cand, NEG_INF)
+    # Backtrack from the best terminal state.
+    jl = m - 1
+    kl = int(np.argmax(dp[jl]))
+    segs = []
+    j, k = jl, kl
+    while j > 0 and back[j, k, 0] >= 0:
+        i, kp = back[j, k]
+        segs.append((idx[i], idx[j], k))
+        j, k = i, kp
+    segs.append((0, idx[j], k))
+    segs.reverse()
 
-        dp, best_i = cand.max(dim=1)  # max over i (columns)
-        bp_list.append(best_i)
+    lab = np.zeros(n, dtype=int)
+    for a, b, ph in segs:
+        lab[a:b] = ph
+    lab[idx[jl]:] = kl
+    return lab
 
-    # --- Boundary K-2 = 4: phase K-2 occupies [idx[i], idx[j]), phase K-1 occupies [idx[j], n) ---
-    b_mid = K - 2   # phase 4 = CraniotomyClosure
-    b_last = K - 1  # phase 5 = PostClosure
 
-    seg_mid = cum_t[idx_t, b_mid].unsqueeze(1) - cum_t[idx_t, b_mid].unsqueeze(0)  # (m,m)
-    seg_last = cum_t[n, b_last] - cum_t[idx_t, b_last]  # (m,): last phase score from j to n
+def first_entry_times(times, lab):
+    """First global time each scored phase is entered -> {phase_name: time or None}."""
+    out = {}
+    for phase_name in config.TRANSITION_PHASES:
+        k = PHASE_INDEX[phase_name]
+        w = np.where(lab == k)[0]
+        out[phase_name] = float(times[w[0]]) if len(w) else None
+    return out
 
-    cand = dp.unsqueeze(0) + seg_mid + seg_last.unsqueeze(1)  # (m, m)
 
-    dur = t_sub.unsqueeze(1) - t_sub.unsqueeze(0)
-    dur_last = t_sub[-1] - t_sub  # (m,)
-    ii = torch.arange(m, device=device).unsqueeze(0)
-    ji = torch.arange(m, device=device).unsqueeze(1)
-    mask = ((ii < ji)
-            & (dur >= min_dur[b_mid] - 1)
-            & (dur_last.unsqueeze(1).expand(m, m) >= min_dur[b_last] - 1))
-    cand = torch.where(mask, cand, NEG_INF)
-
-    final_scores, best_i = cand.max(dim=1)
-    bp_list.append(best_i)
-
-    # --- Backtrack ---
-    best_j = final_scores.argmax().item()
-    path = [best_j]  # last boundary (boundary 4)
-    cur = best_j
-    for bp in reversed(bp_list):
-        cur = bp[cur].item()
-        path.append(cur)
-    path.reverse()
-    # path = [boundary0_sub, boundary1_sub, boundary2_sub, boundary3_sub, boundary4_sub]
-    # = K-1 = 5 entries
-
-    return [float(times[idx[s]]) for s in path]
+def estimate_transitions(times, probs, logA, **kw):
+    """Convenience: smooth -> decode -> first-entry dict of phase onsets."""
+    lab = hsmm_decode(times, probs, logA, **kw)
+    return first_entry_times(times, lab)
 
 
 # ── Error analysis ─────────────────────────────────────────────────────
 
 def compute_timepoint_errors(predicted, expert):
-    phase_to_transition = {
-        "Craniotomy": 0,
-        "ArterialFeederControl": 1,
-        "NidusDissection": 2,
-        "CraniotomyClosure": 3,
-        "PostClosure": 4,
-    }
+    """Absolute onset error per scored phase.
+
+    `predicted` is {phase_name: global_time or None} (HSMM first-entry output).
+    `expert` is the list of (global_time, phase_name) onset annotations. Only phases
+    present in BOTH the expert annotation and the prediction are scored, matched by
+    phase name (first-entry semantics), so a never-entered phase is skipped rather
+    than penalized as a boundary at time 0.
+    """
+    expert_starts = expert_first_starts(expert) if isinstance(expert, list) else dict(expert)
     errors = {}
-    for global_time, phase_name in expert:
-        if phase_name not in phase_to_transition:
+    for phase_name, global_time in expert_starts.items():
+        if phase_name not in config.TRANSITION_PHASES:
             continue
-        idx = phase_to_transition[phase_name]
-        if idx < len(predicted):
-            signed_err = predicted[idx] - global_time
-            errors[phase_name] = {
-                "signed_error": signed_err,
-                "absolute_error": abs(signed_err),
-                "predicted": predicted[idx],
-                "expert": global_time,
-            }
+        pred_time = predicted.get(phase_name)
+        if pred_time is None:
+            continue
+        signed_err = pred_time - global_time
+        errors[phase_name] = {
+            "signed_error": signed_err,
+            "absolute_error": abs(signed_err),
+            "predicted": pred_time,
+            "expert": global_time,
+        }
     return errors
 
 
 # ── Visualization ──────────────────────────────────────────────────────
 
-def plot_surgery_timeline(times, probs, boundaries, expert_transitions, case_num, save_path):
+def plot_surgery_timeline(times, probs, predicted, expert_transitions, case_num, save_path):
+    """predicted may be a {phase: time} dict (HSMM) or a list of onset times."""
+    if isinstance(predicted, dict):
+        boundaries = [predicted[p] for p in config.TRANSITION_PHASES if predicted.get(p) is not None]
+    else:
+        boundaries = list(predicted)
     fig, axes = plt.subplots(2, 1, figsize=(16, 8), sharex=True)
     colors = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd", "#8c564b"]
 
@@ -312,7 +381,7 @@ def plot_surgery_timeline(times, probs, boundaries, expert_transitions, case_num
     ax.set_ylim(0, 1)
 
     ax2 = axes[1]
-    all_bounds = [times[0]] + boundaries + [times[-1]]
+    all_bounds = [times[0]] + sorted(boundaries) + [times[-1]]
     for k in range(min(len(all_bounds) - 1, len(colors))):
         ax2.axvspan(all_bounds[k], all_bounds[k + 1], color=colors[k], alpha=0.6)
     for i, (gt, pname) in enumerate(expert_transitions):
@@ -321,11 +390,7 @@ def plot_surgery_timeline(times, probs, boundaries, expert_transitions, case_num
     ax2.set_xlabel("Surgery time (seconds)")
     ax2.set_ylabel("Phase")
     ax2.set_yticks([])
-    ax2.set_title("Phase Segmentation")
-    for k in range(min(len(all_bounds) - 1, len(config.SCENE_CLASSES))):
-        mid = (all_bounds[k] + all_bounds[k + 1]) / 2
-        ax2.text(mid, 0.5, config.SCENE_CLASSES[k], ha="center", va="center",
-                 fontsize=7, rotation=30, fontweight="bold")
+    ax2.set_title("Phase Segmentation (first-entry order)")
 
     plt.tight_layout()
     plt.savefig(save_path, dpi=150)
@@ -335,7 +400,9 @@ def plot_surgery_timeline(times, probs, boundaries, expert_transitions, case_num
 # ── Main pipeline ──────────────────────────────────────────────────────
 
 def run_temporal_analysis(pred_csv_dir, save_dir):
+    """Run the non-monotonic HSMM over all folds with per-fold (train-only) transitions."""
     os.makedirs(save_dir, exist_ok=True)
+    set_duration_source(pred_csv_dir)
     phase_times = parse_phase_times()
     all_errors = []
 
@@ -345,7 +412,12 @@ def run_temporal_analysis(pred_csv_dir, save_dir):
             print(f"[WARN] {csv_path} not found, skipping fold {fold}")
             continue
 
+        # Transition matrix from TRAINING cases only (all cases not tested in this fold).
         test_cases = config.FOLD_TEST_CASES[fold]
+        test_nums = {int(c.replace("Case", "")) for c in test_cases}
+        train_phase_times = {cn: seq for cn, seq in phase_times.items() if cn not in test_nums}
+        logA = learn_transition(train_phase_times)
+
         for case_str in test_cases:
             case_num = int(case_str.replace("Case", ""))
             if case_num not in phase_times:
@@ -363,16 +435,17 @@ def run_temporal_analysis(pred_csv_dir, save_dir):
                 continue
 
             smoothed = smooth_probabilities(times, probs)
-            boundaries = dp_segmentation(times, smoothed)
+            predicted = estimate_transitions(times, smoothed, logA)
 
-            errors = compute_timepoint_errors(boundaries, expert_transitions)
+            errors = compute_timepoint_errors(predicted, expert_transitions)
             for phase_name, err in errors.items():
                 all_errors.append({"fold": fold, "case": case_num, "phase": phase_name, **err})
 
             plot_surgery_timeline(
-                times, smoothed, boundaries, expert_transitions, case_num,
+                times, smoothed, predicted, expert_transitions, case_num,
                 os.path.join(save_dir, f"timeline_case{case_num:02d}_fold{fold}.png"))
-            print(f"  Fold {fold}, Case {case_num}: {len(boundaries)} boundaries estimated")
+            print(f"  Fold {fold}, Case {case_num}: onsets estimated for "
+                  f"{sum(v is not None for v in predicted.values())} phases")
 
     if all_errors:
         err_df = pd.DataFrame(all_errors)
