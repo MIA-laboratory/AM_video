@@ -2,6 +2,17 @@
 
 GitHub `MIA-laboratory/AM_video` で公開する内容の記録。
 
+## 対応論文（出版済み）
+
+Sugimori, H.; Sugiyama, T.; Poudel, S.; Togo, R.; Tang, M.; Feng, H.; Koyano, H.;
+Ujihara, M.; Hirata, K.; Ogawa, T.; Haseyama, M.; Kudo, K.; Fujimura, M.
+"Automated Scene Classification and Interpretable Time-Point Estimation for
+Arteriovenous Malformation Resection Videos Using Deep Learning and a Non-Monotonic
+Hidden Semi-Markov Model." *Applied Sciences* **2026**, *16*(14), 7118.
+https://doi.org/10.3390/app16147118
+
+本リポジトリは上記論文に基づく（論文の Rev3＝出版版に準拠）。
+
 ## 方針
 
 - 公開対象 = **方法論（非単調 隠れセミマルコフモデル HSMM による時系列再構成）の実装のみ**。

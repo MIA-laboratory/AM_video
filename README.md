@@ -2,9 +2,14 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 ![Python](https://img.shields.io/badge/Python-3.x-blue.svg)
+[![DOI](https://img.shields.io/badge/DOI-10.3390%2Fapp16147118-blue.svg)](https://doi.org/10.3390/app16147118)
 
 Source code for the **temporal reconstruction** stage of an automated surgical-phase
 analysis pipeline for arteriovenous malformation (AVM) resection videos.
+
+This repository accompanies the peer-reviewed article published in *Applied Sciences*
+(2026): [https://doi.org/10.3390/app16147118](https://doi.org/10.3390/app16147118).
+Please cite it if you use this code (see [Citation](#citation)).
 
 Given per-frame surgical-scene class probabilities (produced by a frame classifier —
 in our study, **Inception-ResNet-v2** networks fine-tuned in **PyTorch**), this code
@@ -209,9 +214,27 @@ Released under the [MIT License](LICENSE).
 
 ## Citation
 
-If you use this code, please cite the associated *Applied Sciences* (2026) article on
-automated scene classification and interpretable time-point estimation for AVM resection
-videos.
+If you use this code, please cite the associated article:
+
+> Sugimori, H.; Sugiyama, T.; Poudel, S.; Togo, R.; Tang, M.; Feng, H.; Koyano, H.;
+> Ujihara, M.; Hirata, K.; Ogawa, T.; Haseyama, M.; Kudo, K.; Fujimura, M.
+> Automated Scene Classification and Interpretable Time-Point Estimation for Arteriovenous
+> Malformation Resection Videos Using Deep Learning and a Non-Monotonic Hidden Semi-Markov
+> Model. *Applied Sciences* **2026**, *16*(14), 7118.
+> [https://doi.org/10.3390/app16147118](https://doi.org/10.3390/app16147118)
+
+```bibtex
+@Article{app16147118,
+  author         = {Sugimori, Hiroyuki and Sugiyama, Taku and Poudel, Saseem and Togo, Ren and Tang, Minghui and Feng, Han and Koyano, Hidenori and Ujihara, Masaki and Hirata, Kenji and Ogawa, Takahiro and Haseyama, Miki and Kudo, Kohsuke and Fujimura, Miki},
+  title          = {Automated Scene Classification and Interpretable Time-Point Estimation for Arteriovenous Malformation Resection Videos Using Deep Learning and a Non-Monotonic Hidden Semi-Markov Model},
+  journal        = {Applied Sciences},
+  volume         = {16},
+  year           = {2026},
+  number         = {14},
+  article-number = {7118},
+  doi            = {10.3390/app16147118}
+}
+```
 
 ## Acknowledgements
 
@@ -221,4 +244,5 @@ Government of Japan, Regional University and Regional Industry Creation Grant Pr
 ## Contact
 
 MIA-laboratory, Hokkaido University. For questions or model-access requests, please
-contact the corresponding author of the associated article.
+contact the corresponding author of the associated article (*Appl. Sci.* **2026**,
+*16*(14), 7118; [doi:10.3390/app16147118](https://doi.org/10.3390/app16147118)).
